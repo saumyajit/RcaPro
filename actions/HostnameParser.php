@@ -133,28 +133,56 @@ class HostnameParser {
 
 	private function parseHostgroups(array $hostgroups): array {
 		$out = [];
-		$patterns = $this->map['hostgroup_patterns'] ?? [];
+		$patterns = $this->map['hostgroup_patterns'] ?? [
+			'customer' => '^CUSTOMER\/(.+)$',
+			'product'  => '^PRODUCT\/(.+)$',
+			'type'     => '^TYPE\/(.+)$',
+		];
 
 		foreach ($hostgroups as $hg) {
-			// CUSTOMER/Google Inc
+			// CUSTOMER/xxx
 			if (!empty($patterns['customer']) && preg_match('/' . $patterns['customer'] . '/i', $hg, $m)) {
-				$out['customer_name'] = trim($m[1]);
-				$out['customer'] = $this->reverseCustomerLookup($out['customer_name']);
+				$label = trim($m[1]);
+				$code  = $this->reverseCustomerLookup($label);
+				if ($code === '') {
+					// Not in map — generate slug consistent with RcaView dropdown key
+					$code = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $label));
+				}
+				$out['customer']      = $code;
+				$out['customer_name'] = $label;
+				// Preserve mapped short name if available
+				if (!empty($this->map['customers'][$code]['short'])) {
+					$out['customer_short'] = $this->map['customers'][$code]['short'];
+				} else {
+					$out['customer_short'] = ucwords(strtolower($label));
+				}
 			}
-			// PRODUCT/Android
+			// PRODUCT/xxx
 			if (!empty($patterns['product']) && preg_match('/' . $patterns['product'] . '/i', $hg, $m)) {
-				$out['product_name'] = trim($m[1]);
-				$out['product'] = $this->reverseProductLookup($out['product_name']);
+				$label = trim($m[1]);
+				$code  = $this->reverseProductLookup($label);
+				if ($code === '') {
+					$code = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $label));
+				}
+				$out['product']       = $code;
+				$out['product_name']  = $label;
+				$out['product_short'] = ucwords(strtolower($label));
 			}
-			// TYPE/Web Server
+			// TYPE/xxx
 			if (!empty($patterns['type']) && preg_match('/' . $patterns['type'] . '/i', $hg, $m)) {
 				$typeName = trim($m[1]);
 				$typeData = $this->reverseTypeLookup($typeName);
 				if ($typeData) {
-					$out['type'] = $typeData['code'];
-					$out['type_name'] = $typeData['name'];
-					$out['type_icon'] = $typeData['icon'] ?? '🖥';
+					$out['type']       = $typeData['code'];
+					$out['type_name']  = $typeData['name'];
+					$out['type_icon']  = $typeData['icon'] ?? '🖥';
 					$out['type_layer'] = $typeData['layer'] ?? 3;
+				} else {
+					// Type not in map — use slug
+					$out['type']       = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $typeName));
+					$out['type_name']  = $typeName;
+					$out['type_icon']  = '🖥';
+					$out['type_layer'] = 3;
 				}
 			}
 		}
