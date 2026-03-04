@@ -1,29 +1,23 @@
 <?php
 /**
  * RCA View template — renders the full RCA module page.
- *
  * CSS/JS loaded directly here. Module.php handles menu only.
- * Module folder name detected dynamically from __DIR__ so it works
- * regardless of whether the folder is named 'rca', 'RcaPro', etc.
+ * Module folder name detected dynamically from __DIR__.
  *
- * @var array $data  ['is_super_admin', 'environments', 'customers']
+ * @var array $data  ['is_super_admin', 'environments', 'customers', 'server_types']
  */
 
 $isSuperAdmin = $data['is_super_admin'] ?? false;
 $environments = $data['environments']   ?? [];
 $customers    = $data['customers']      ?? [];
+$serverTypes  = $data['server_types']   ?? [];
 
-// Detect module folder name dynamically — views/ is one level inside the module root
-// __DIR__ = /usr/share/zabbix/modules/RcaPro/views
-// dirname(__DIR__) = /usr/share/zabbix/modules/RcaPro
-// basename(dirname(__DIR__)) = RcaPro
+// Detect module folder name from filesystem — works for any folder name (rca, RcaPro, etc.)
 $moduleId  = basename(dirname(__DIR__));
 $assetBase = 'modules/' . $moduleId . '/assets';
 
 $ajaxUrl     = (new CUrl('zabbix.php'))->setArgument('action', 'RcaData')->getUrl();
 $registryUrl = (new CUrl('zabbix.php'))->setArgument('action', 'RcaRegistry')->getUrl();
-
-$serverTypes = $data['server_types'] ?? [];
 
 $jsConfig = json_encode([
 	'is_super_admin' => $isSuperAdmin,
@@ -36,7 +30,7 @@ $jsConfig = json_encode([
 
 <div id="rca-module" class="rca-wrap">
 
-	<!-- FILTER BAR -->
+	<!-- ── FILTER BAR ───────────────────────────────────────────── -->
 	<div class="rca-filterbar" id="rca-filterbar">
 		<div class="rca-filter-group">
 			<span class="rca-filter-label"><?= _('Window') ?></span>
@@ -108,21 +102,60 @@ $jsConfig = json_encode([
 		</div>
 	</div>
 
-	<!-- SUMMARY STRIP -->
+	<!-- ── SUMMARY STRIP — all 6 Zabbix severity levels ────────── -->
 	<div class="rca-summary-strip" id="rca-summary">
-		<div class="rca-stat"><div class="rca-stat-val rca-crit" id="sval-critical">—</div><div class="rca-stat-label"><?= _('Critical') ?></div></div>
-		<div class="rca-stat"><div class="rca-stat-val rca-warn" id="sval-warning">—</div><div class="rca-stat-label"><?= _('Warning') ?></div></div>
-		<div class="rca-stat"><div class="rca-stat-val rca-info" id="sval-hosts">—</div><div class="rca-stat-label"><?= _('Affected Hosts') ?></div></div>
-		<div class="rca-stat"><div class="rca-stat-val rca-purple" id="sval-chains">—</div><div class="rca-stat-label"><?= _('Cascade Chains') ?></div></div>
-		<div class="rca-stat"><div class="rca-stat-val rca-teal" id="sval-gaps">—</div><div class="rca-stat-label"><?= _('Gap Detections') ?></div></div>
-		<div class="rca-stat"><div class="rca-stat-val rca-ok" id="sval-span">—</div><div class="rca-stat-label"><?= _('First→Last Span') ?></div></div>
+
+		<div class="rca-stat rca-stat-disaster">
+			<div class="rca-stat-val" id="sval-disaster">—</div>
+			<div class="rca-stat-label"><?= _('Disaster') ?></div>
+		</div>
+		<div class="rca-stat rca-stat-high">
+			<div class="rca-stat-val" id="sval-high">—</div>
+			<div class="rca-stat-label"><?= _('High') ?></div>
+		</div>
+		<div class="rca-stat rca-stat-average">
+			<div class="rca-stat-val" id="sval-average">—</div>
+			<div class="rca-stat-label"><?= _('Average') ?></div>
+		</div>
+		<div class="rca-stat rca-stat-warning">
+			<div class="rca-stat-val" id="sval-warning">—</div>
+			<div class="rca-stat-label"><?= _('Warning') ?></div>
+		</div>
+		<div class="rca-stat rca-stat-info">
+			<div class="rca-stat-val" id="sval-information">—</div>
+			<div class="rca-stat-label"><?= _('Information') ?></div>
+		</div>
+		<div class="rca-stat rca-stat-nc">
+			<div class="rca-stat-val" id="sval-not_classified">—</div>
+			<div class="rca-stat-label"><?= _('Not Classified') ?></div>
+		</div>
+
+		<div class="rca-summary-sep"></div>
+
+		<div class="rca-stat">
+			<div class="rca-stat-val rca-info" id="sval-hosts">—</div>
+			<div class="rca-stat-label"><?= _('Affected Hosts') ?></div>
+		</div>
+		<div class="rca-stat">
+			<div class="rca-stat-val rca-purple" id="sval-chains">—</div>
+			<div class="rca-stat-label"><?= _('Cascade Chains') ?></div>
+		</div>
+		<div class="rca-stat">
+			<div class="rca-stat-val rca-teal" id="sval-gaps">—</div>
+			<div class="rca-stat-label"><?= _('Gap Detections') ?></div>
+		</div>
+		<div class="rca-stat">
+			<div class="rca-stat-val rca-ok" id="sval-span">—</div>
+			<div class="rca-stat-label"><?= _('First→Last Span') ?></div>
+		</div>
+
 		<div class="rca-root-badge" id="rca-root-badge" style="display:none">
 			<span class="rca-root-icon">⚑</span>
 			<span id="rca-root-text"><?= _('Root cause identified') ?></span>
 		</div>
 	</div>
 
-	<!-- MAIN AREA -->
+	<!-- ── MAIN AREA ────────────────────────────────────────────── -->
 	<div class="rca-main" id="rca-main">
 
 		<div class="rca-loading" id="rca-loading" style="display:none">
@@ -139,6 +172,7 @@ $jsConfig = json_encode([
 		<!-- TIMELINE VIEW -->
 		<div class="rca-view-content" id="view-timeline" style="display:none">
 			<div class="rca-tl-layout" id="rca-tl-layout">
+
 				<div class="rca-tl-panel" id="rca-tl-panel">
 					<div class="rca-tl-header">
 						<span class="rca-panel-title"><?= _('Trigger Timeline') ?></span>
@@ -151,12 +185,15 @@ $jsConfig = json_encode([
 					<div class="rca-tl-body" id="rca-tl-body"></div>
 					<div class="rca-tl-legend">
 						<div class="rca-leg-item"><div class="rca-leg-root"></div><?= _('Root Cause') ?></div>
-						<div class="rca-leg-item"><div class="rca-leg-sw rca-sw-crit"></div><?= _('Critical') ?></div>
-						<div class="rca-leg-item"><div class="rca-leg-sw rca-sw-warn"></div><?= _('Warning') ?></div>
-						<div class="rca-leg-item"><div class="rca-leg-sw rca-sw-ok"></div><?= _('Recovery') ?></div>
+						<div class="rca-leg-item"><div class="rca-leg-sw" style="background:#e45555"></div><?= _('Disaster') ?></div>
+						<div class="rca-leg-item"><div class="rca-leg-sw" style="background:#e97b00"></div><?= _('High') ?></div>
+						<div class="rca-leg-item"><div class="rca-leg-sw" style="background:#f0a500"></div><?= _('Average') ?></div>
+						<div class="rca-leg-item"><div class="rca-leg-sw" style="background:#649e49"></div><?= _('Warning') ?></div>
+						<div class="rca-leg-item"><div class="rca-leg-sw" style="background:#58a6ff"></div><?= _('Info') ?></div>
 						<div class="rca-leg-item rca-leg-right"><?= _('Click any event for details') ?></div>
 					</div>
 				</div>
+
 				<div class="rca-detail-panel" id="rca-detail-panel" style="display:none">
 					<div class="rca-detail-header">
 						<div class="rca-detail-tabs" id="rca-detail-tabs">
@@ -169,6 +206,7 @@ $jsConfig = json_encode([
 					</div>
 					<div class="rca-detail-body" id="rca-detail-body"></div>
 				</div>
+
 			</div>
 		</div>
 
