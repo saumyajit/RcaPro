@@ -357,7 +357,7 @@ class RcaData extends CController {
 			$result = API::Host()->get([
 				'output'       => ['hostid', 'host', 'name', 'status'],
 				'hostids'      => $hostIds,
-				'selectGroups' => ['groupid', 'name'],
+				'selectHostGroups' => ['groupid', 'name'],
 				'selectTags'   => ['tag', 'value'],
 			]);
 			return is_array($result) ? $result : [];
