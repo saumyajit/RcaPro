@@ -5,7 +5,7 @@
 	"version": "1.0.0",
 	"namespace": "RCA",
 	"description": "Advanced Root Cause Analysis module with timeline visualization, cascade chain detection, gap analysis, CI relationship mapping, and trainable registry. Supports hostname-based metadata parsing and Zabbix hostgroup fallback.",
-	"author": "Saumyajit Pramanik,
+	"author": "Saumyajit Pramanik",
 	"url": "https://github.com/yourorg/zabbix-rca",
 	"actions": {
 		"RcaView": {
