@@ -1,8 +1,12 @@
 <?php
 /**
- * RcaData — AJAX data endpoint for the RCA module.
+ * RcaData — AJAX JSON endpoint.
  * Namespace: Modules\RCA\Actions
  * Zabbix 7.0+
+ *
+ * Pattern: output JSON directly in doAction(), tell Zabbix to respond
+ * with an empty CControllerResponseData so it doesn't try to render
+ * a view on top of our output.
  */
 
 namespace Modules\RCA\Actions;
@@ -34,7 +38,7 @@ class RcaData extends CController {
 		];
 		$ret = $this->validateInput($fields);
 		if (!$ret) {
-			$this->setResponse(new CControllerResponseData($this->emptyResponse(0, 0)));
+			$this->sendJson($this->emptyResponse(0, 0));
 		}
 		return $ret;
 	}
@@ -58,34 +62,37 @@ class RcaData extends CController {
 			'time_from_fmt' => date('Y-m-d H:i:s', $timeFrom),
 			'time_till_fmt' => date('Y-m-d H:i:s', $timeTill),
 			'server_time'   => date('Y-m-d H:i:s', time()),
+			'env'           => $env,
+			'customer'      => $customer,
+			'correlate_by'  => $correlateBy,
 		];
 
 		try {
 			$problems = $this->fetchProblems($timeFrom, $timeTill, $debug);
-
-			$debug['problems_total'] = count($problems);
+			$debug['problems_fetched'] = count($problems);
 
 			if (empty($problems)) {
 				$resp = $this->emptyResponse($timeFrom, $timeTill);
-				$resp['debug'] = $debug;
+				if (self::DEBUG) $resp['debug'] = $debug;
 				$this->setResponse(new CControllerResponseData($resp));
 				return;
 			}
 
 			$triggerIds     = array_unique(array_column($problems, 'objectid'));
-			$triggerHostMap = $this->fetchTriggerHostMap($triggerIds, $debug);
-			$hostIds        = array_unique(array_map(fn($h) => $h['hostid'], array_values($triggerHostMap)));
-			$hostsRaw       = $this->fetchHosts($hostIds);
-			$hostMeta       = $this->parseHostMeta($hostsRaw);
+			$triggerHostMap = $this->fetchTriggerHostMap($triggerIds);
+			$debug['triggers_mapped'] = count($triggerHostMap);
 
-			$debug['host_count'] = count($hostMeta);
+			$hostIds  = array_unique(array_map(fn($h) => $h['hostid'], array_values($triggerHostMap)));
+			$hostsRaw = $this->fetchHosts($hostIds);
+			$hostMeta = $this->parseHostMeta($hostsRaw);
+			$debug['hosts_found'] = count($hostMeta);
 
 			$problems = $this->applyFilters($problems, $triggerHostMap, $hostMeta, $env, $customer, $search);
 			$debug['after_filter'] = count($problems);
 
 			if (empty($problems)) {
 				$resp = $this->emptyResponse($timeFrom, $timeTill);
-				$resp['debug'] = $debug;
+				if (self::DEBUG) $resp['debug'] = $debug;
 				$this->setResponse(new CControllerResponseData($resp));
 				return;
 			}
@@ -107,29 +114,24 @@ class RcaData extends CController {
 				'time_from'  => $timeFrom,
 				'time_till'  => $timeTill,
 			];
-
 			if (self::DEBUG) $response['debug'] = $debug;
 
 			$this->setResponse(new CControllerResponseData($response));
 
-		} catch (\Exception $e) {
-			$resp          = $this->emptyResponse($timeFrom, $timeTill);
+		} catch (\Throwable $e) {
+			$resp = $this->emptyResponse($timeFrom, $timeTill);
 			$resp['error'] = $e->getMessage();
-			$resp['trace'] = $e->getTraceAsString();
+			$resp['error_file'] = basename($e->getFile()) . ':' . $e->getLine();
 			$resp['debug'] = $debug;
 			$this->setResponse(new CControllerResponseData($resp));
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────
-	// FETCH PROBLEMS — tries 4 different API approaches to find what works
-	// in this specific Zabbix 7.0 install. Debug captures each attempt.
-	// ─────────────────────────────────────────────────────────────────────
+
+	// ── FETCH: tries Event API first, falls back to Problem API ──────────
 
 	private function fetchProblems(int $timeFrom, int $timeTill, array &$debug): array {
-		$attempts = [];
-
-		// ── Attempt 1: Event API, value=1 (problem state), with time ─────
+		// Attempt 1: Event API (most reliable in Zabbix 7.0 module context)
 		try {
 			$r = API::Event()->get([
 				'output'     => ['eventid', 'objectid', 'clock', 'name', 'severity',
@@ -144,41 +146,17 @@ class RcaData extends CController {
 				'sortorder'  => 'ASC',
 				'limit'      => self::MAX_EVENTS,
 			]);
-			$cnt = is_array($r) ? count($r) : null;
-			$attempts['1_event_value1_timed'] = $cnt ?? ('not_array:' . gettype($r));
-			if (is_array($r) && $cnt > 0) {
-				$debug['fetch_method'] = 'event_api_value1_timed';
-				$debug['fetch_attempts'] = $attempts;
-				return $this->normaliseEventRows($r);
+			if (is_array($r) && count($r) > 0) {
+				$debug['fetch_method'] = 'event_api';
+				$debug['fetch_count']  = count($r);
+				return array_map(fn($e) => array_merge($e, ['r_clock' => null]), $r);
 			}
-		} catch (\Exception $e) { $attempts['1_event_value1_timed_ex'] = $e->getMessage(); }
+			$debug['event_api_count'] = is_array($r) ? 0 : 'failed';
+		} catch (\Throwable $e) {
+			$debug['event_api_error'] = $e->getMessage();
+		}
 
-		// ── Attempt 2: Event API, all values, with time ───────────────────
-		try {
-			$r = API::Event()->get([
-				'output'     => ['eventid', 'objectid', 'clock', 'name', 'severity',
-				                 'acknowledged', 'r_eventid', 'cause_eventid', 'value'],
-				'selectTags' => ['tag', 'value'],
-				'source'     => 0,
-				'object'     => 0,
-				'time_from'  => $timeFrom,
-				'time_till'  => $timeTill,
-				'sortfield'  => 'clock',
-				'sortorder'  => 'ASC',
-				'limit'      => self::MAX_EVENTS,
-			]);
-			$cnt = is_array($r) ? count($r) : null;
-			$attempts['2_event_all_values_timed'] = $cnt ?? ('not_array:' . gettype($r));
-			if (is_array($r) && $cnt > 0) {
-				// Filter to only problem-state rows (value=1)
-				$r = array_values(array_filter($r, fn($e) => (int)($e['value'] ?? 1) === 1));
-				$debug['fetch_method'] = 'event_api_all_values_timed';
-				$debug['fetch_attempts'] = $attempts;
-				return $this->normaliseEventRows($r);
-			}
-		} catch (\Exception $e) { $attempts['2_event_all_values_timed_ex'] = $e->getMessage(); }
-
-		// ── Attempt 3: Problem API, minimal params ────────────────────────
+		// Attempt 2: Problem API
 		try {
 			$r = API::Problem()->get([
 				'output'     => ['eventid', 'objectid', 'clock', 'name', 'severity',
@@ -190,162 +168,79 @@ class RcaData extends CController {
 				'sortorder'  => 'ASC',
 				'limit'      => self::MAX_EVENTS,
 			]);
-			$cnt = is_array($r) ? count($r) : null;
-			$attempts['3_problem_timed'] = $cnt ?? ('not_array:' . gettype($r));
-			if (is_array($r) && $cnt > 0) {
-				$debug['fetch_method'] = 'problem_api_timed';
-				$debug['fetch_attempts'] = $attempts;
+			if (is_array($r) && count($r) > 0) {
+				$debug['fetch_method'] = 'problem_api';
+				$debug['fetch_count']  = count($r);
 				return $r;
 			}
-		} catch (\Exception $e) { $attempts['3_problem_timed_ex'] = $e->getMessage(); }
+			$debug['problem_api_count'] = is_array($r) ? 0 : 'failed';
+		} catch (\Throwable $e) {
+			$debug['problem_api_error'] = $e->getMessage();
+		}
 
-		// ── Attempt 4: Problem API, recent=true only (active problems) ────
-		try {
-			$r = API::Problem()->get([
-				'output'     => ['eventid', 'objectid', 'clock', 'name', 'severity',
-				                 'acknowledged', 'r_eventid', 'r_clock', 'cause_eventid'],
-				'selectTags' => ['tag', 'value'],
-				'recent'     => true,
-				'sortfield'  => 'clock',
-				'sortorder'  => 'DESC',
-				'limit'      => 50,
-			]);
-			$cnt = is_array($r) ? count($r) : null;
-			$attempts['4_problem_recent_only'] = $cnt ?? ('not_array:' . gettype($r));
-			if (is_array($r) && $cnt > 0) {
-				$debug['fetch_method'] = 'problem_api_recent';
-				// Show sample timestamps so we can see what window they fall in
-				$debug['recent_sample'] = array_map(fn($p) => [
-					'name'  => substr($p['name'] ?? '', 0, 60),
-					'clock' => date('Y-m-d H:i:s', (int)$p['clock']),
-					'sev'   => $p['severity'],
-				], array_slice($r, 0, 5));
-				$debug['fetch_attempts'] = $attempts;
-				// Filter to time window
-				$r = array_values(array_filter($r, fn($p) =>
-					(int)$p['clock'] >= $timeFrom && (int)$p['clock'] <= $timeTill
-				));
-				$debug['after_time_filter'] = count($r);
-				return $r;
-			}
-		} catch (\Exception $e) { $attempts['4_problem_recent_ex'] = $e->getMessage(); }
-
-		// ── Attempt 5: Trigger API — fetch triggers in PROBLEM state ──────
-		// Completely bypasses Event/Problem APIs — uses Trigger API directly
+		// Attempt 3: Trigger API — fetch triggers currently in problem state
 		try {
 			$r = API::Trigger()->get([
-				'output'          => ['triggerid', 'description', 'priority',
-				                      'lastchange', 'value', 'error'],
+				'output'          => ['triggerid', 'description', 'priority', 'lastchange'],
 				'selectHosts'     => ['hostid', 'host', 'name'],
-				'selectLastEvent' => ['eventid', 'clock', 'name', 'severity',
-				                      'acknowledged', 'value'],
-				'filter'          => ['value' => 1],  // TRIGGER_VALUE_TRUE = problem
+				'filter'          => ['value' => 1],
 				'lastChangeSince' => $timeFrom,
 				'lastChangeTill'  => $timeTill,
-				'skipDependent'   => false,
 				'sortfield'       => 'lastchange',
 				'sortorder'       => 'ASC',
 				'limit'           => self::MAX_EVENTS,
 			]);
-			$cnt = is_array($r) ? count($r) : null;
-			$attempts['5_trigger_in_problem'] = $cnt ?? ('not_array:' . gettype($r));
-			if (is_array($r) && $cnt > 0) {
+			if (is_array($r) && count($r) > 0) {
 				$debug['fetch_method'] = 'trigger_api';
-				$debug['fetch_attempts'] = $attempts;
-				// Convert trigger rows to problem-shaped rows
-				return $this->normaliseTriggerRows($r);
+				$debug['fetch_count']  = count($r);
+				return array_map(fn($t) => [
+					'eventid'       => 't_' . $t['triggerid'],
+					'objectid'      => $t['triggerid'],
+					'clock'         => $t['lastchange'],
+					'name'          => $t['description'],
+					'severity'      => $t['priority'],
+					'acknowledged'  => '0',
+					'r_eventid'     => null,
+					'r_clock'       => null,
+					'cause_eventid' => null,
+					'tags'          => [],
+				], $r);
 			}
-		} catch (\Exception $e) { $attempts['5_trigger_ex'] = $e->getMessage(); }
+			$debug['trigger_api_count'] = is_array($r) ? 0 : 'failed';
+		} catch (\Throwable $e) {
+			$debug['trigger_api_error'] = $e->getMessage();
+		}
 
-		// ── Attempt 6: Trigger API, all recent (no time), sample ─────────
-		try {
-			$r = API::Trigger()->get([
-				'output'      => ['triggerid', 'description', 'priority', 'lastchange', 'value'],
-				'selectHosts' => ['hostid', 'host'],
-				'filter'      => ['value' => 1],
-				'limit'       => 20,
-			]);
-			$cnt = is_array($r) ? count($r) : null;
-			$attempts['6_trigger_all_recent'] = $cnt ?? ('not_array:' . gettype($r));
-			if (is_array($r)) {
-				$debug['trigger_sample'] = array_map(fn($t) => [
-					'desc'  => substr($t['description'] ?? '', 0, 60),
-					'host'  => $t['hosts'][0]['host'] ?? '?',
-					'clock' => date('Y-m-d H:i:s', (int)$t['lastchange']),
-					'prio'  => $t['priority'],
-				], array_slice($r, 0, 5));
-			}
-		} catch (\Exception $e) { $attempts['6_trigger_all_recent_ex'] = $e->getMessage(); }
-
-		$debug['fetch_attempts'] = $attempts;
 		return [];
 	}
 
-	private function normaliseEventRows(array $events): array {
-		foreach ($events as &$e) {
-			$e['r_clock']       = null;
-			$e['r_eventid']     = $e['r_eventid']     ?? null;
-			$e['cause_eventid'] = $e['cause_eventid'] ?? null;
-		}
-		unset($e);
-		return $events;
-	}
-
-	private function normaliseTriggerRows(array $triggers): array {
-		$rows = [];
-		foreach ($triggers as $t) {
-			$lastEvent = $t['lastEvent'] ?? $t['selectLastEvent'] ?? null;
-			$eventId   = $lastEvent['eventid'] ?? ('t_' . $t['triggerid']);
-			$rows[] = [
-				'eventid'       => $eventId,
-				'objectid'      => $t['triggerid'],
-				'clock'         => $t['lastchange'],
-				'name'          => $t['description'],
-				'severity'      => $t['priority'],
-				'acknowledged'  => '0',
-				'r_eventid'     => null,
-				'r_clock'       => null,
-				'cause_eventid' => null,
-				'tags'          => [],
-			];
-		}
-		return $rows;
-	}
-
-	// ── TRIGGER → HOST MAP ────────────────────────────────────────────────
-
-	private function fetchTriggerHostMap(array $triggerIds, array &$debug): array {
+	private function fetchTriggerHostMap(array $triggerIds): array {
 		if (empty($triggerIds)) return [];
-		// Strip synthetic t_ prefixes from trigger API fallback
-		$realIds = array_filter($triggerIds, fn($id) => !str_starts_with((string)$id, 't_'));
-		$syntheticIds = array_filter($triggerIds, fn($id) => str_starts_with((string)$id, 't_'));
+		// Strip synthetic t_ prefix
+		$realIds = array_values(array_filter($triggerIds, fn($id) => !str_starts_with((string)$id, 't_')));
+		$synIds  = array_values(array_filter($triggerIds, fn($id) =>  str_starts_with((string)$id, 't_')));
 
 		$map = [];
 
 		if (!empty($realIds)) {
 			try {
 				$triggers = API::Trigger()->get([
-					'output'            => ['triggerid'],
-					'triggerids'        => array_values($realIds),
-					'selectHosts'       => ['hostid', 'host', 'name', 'status'],
-					'expandDescription' => false,
+					'output'      => ['triggerid'],
+					'triggerids'  => $realIds,
+					'selectHosts' => ['hostid', 'host', 'name', 'status'],
 				]);
 				if (is_array($triggers)) {
 					foreach ($triggers as $t) {
 						if (!empty($t['hosts'])) $map[$t['triggerid']] = $t['hosts'][0];
 					}
 				}
-			} catch (\Exception $e) {
-				$debug['trigger_map_error'] = $e->getMessage();
-			}
+			} catch (\Throwable $e) {}
 		}
 
-		// For synthetic IDs from trigger fallback, extract triggerid from prefix
-		foreach ($syntheticIds as $sid) {
-			$tid = substr($sid, 2); // strip "t_"
-			if (!isset($map[$sid]) && isset($map[$tid])) {
-				$map[$sid] = $map[$tid];
-			}
+		// Re-map synthetic IDs: t_123 → look up triggerid 123
+		foreach ($synIds as $sid) {
+			$tid = substr($sid, 2);
+			if (isset($map[$tid])) $map[$sid] = $map[$tid];
 		}
 
 		return $map;
@@ -354,27 +249,27 @@ class RcaData extends CController {
 	private function fetchHosts(array $hostIds): array {
 		if (empty($hostIds)) return [];
 		try {
-			$result = API::Host()->get([
+			$r = API::Host()->get([
 				'output'       => ['hostid', 'host', 'name', 'status'],
 				'hostids'      => $hostIds,
 				'selectHostGroups' => ['groupid', 'name'],
 				'selectTags'   => ['tag', 'value'],
 			]);
-			return is_array($result) ? $result : [];
-		} catch (\Exception $e) { return []; }
+			return is_array($r) ? $r : [];
+		} catch (\Throwable $e) { return []; }
 	}
 
 	private function parseHostMeta(array $hostsRaw): array {
 		$parser = new HostnameParser();
 		$meta   = [];
 		foreach ($hostsRaw as $host) {
-			$hostgroups            = array_column($host['groups'] ?? [], 'name');
-			$parsed                = $parser->parse($host['host'], $hostgroups);
+			$groups                = array_column($host['groups'] ?? [], 'name');
+			$parsed                = $parser->parse($host['host'], $groups);
 			$meta[$host['hostid']] = array_merge($parsed, [
 				'hostid'     => $host['hostid'],
 				'host'       => $host['host'],
 				'name'       => $host['name'],
-				'hostgroups' => $hostgroups,
+				'hostgroups' => $groups,
 				'tags'       => $host['tags'] ?? [],
 			]);
 		}
@@ -426,7 +321,6 @@ class RcaData extends CController {
 				'env'              => $meta['env']              ?? '',
 				'env_name'         => $meta['env_name']         ?? '',
 				'env_short'        => $meta['env_short']        ?? '',
-				'env_color'        => $meta['env_color']        ?? '',
 				'customer'         => $meta['customer']         ?? '',
 				'customer_name'    => $meta['customer_name']    ?? '',
 				'customer_short'   => $meta['customer_short']   ?? '',
@@ -466,8 +360,10 @@ class RcaData extends CController {
 					$events[$i]['chain_id'] = $chains[$key]['chain_id'];
 					$events[$i]['delta_seconds'] = 0;
 				}
-				$events[$j] = array_merge($events[$j], ['rca_role' => 'cascade', 'chain_id' => $chains[$key]['chain_id'],
-				    'delta_seconds' => $delta, 'corr_score' => round($score, 2)]);
+				$events[$j]['rca_role'] = 'cascade';
+				$events[$j]['chain_id'] = $chains[$key]['chain_id'];
+				$events[$j]['delta_seconds'] = $delta;
+				$events[$j]['corr_score'] = round($score, 2);
 				$matched[$j] = true;
 				$chains[$key]['links'][] = ['eventid' => $effect['eventid'], 'delta_seconds' => $delta, 'corr_score' => round($score, 2)];
 				$chains[$key]['total_span_s'] = max($chains[$key]['total_span_s'], $delta);
@@ -480,19 +376,19 @@ class RcaData extends CController {
 		$s = 0.0;
 		if (in_array('alert_name', $by)) {
 			foreach ($patterns as $p) {
-				if (fnmatch($p['cause_pattern'], $c['trigger_name'], FNM_CASEFOLD) &&
-				    fnmatch($p['effect_pattern'], $e['trigger_name'], FNM_CASEFOLD) &&
-				    $delta <= (int)$p['window_seconds']) { $s += 0.40 * (float)($p['confidence']??0.8); break; }
+				if (fnmatch($p['cause_pattern'],$c['trigger_name'],FNM_CASEFOLD) &&
+				    fnmatch($p['effect_pattern'],$e['trigger_name'],FNM_CASEFOLD) &&
+				    $delta<=(int)$p['window_seconds']) { $s+=0.40*(float)($p['confidence']??0.8); break; }
 			}
 		}
-		if (in_array('time', $by)) $s += 0.25 * max(0, 1.0 - ($delta / 3600));
-		if (in_array('hostgroup', $by) && !empty($c['customer_name']) && $c['customer_name'] === $e['customer_name']) $s += 0.20;
+		if (in_array('time',$by))      $s += 0.25*max(0,1.0-($delta/3600));
+		if (in_array('hostgroup',$by) && !empty($c['customer_name']) && $c['customer_name']===$e['customer_name']) $s += 0.20;
 		if ($c['type_layer'] < $e['type_layer']) $s += 0.10;
-		if (in_array('tags', $by)) {
-			$ol = count(array_intersect(array_column($c['tags'],'value'), array_column($e['tags'],'value')));
-			if ($ol > 0) $s += 0.05 * min(1.0, $ol / 3);
+		if (in_array('tags',$by)) {
+			$ol = count(array_intersect(array_column($c['tags'],'value'),array_column($e['tags'],'value')));
+			if ($ol>0) $s += 0.05*min(1.0,$ol/3);
 		}
-		return min(1.0, $s);
+		return min(1.0,$s);
 	}
 
 	private function scoreRootCause(array &$events, array $chains, array $registry): ?array {
@@ -500,17 +396,17 @@ class RcaData extends CController {
 		$best = null; $bestScore = -1;
 		foreach ($chains as $chain) {
 			$root = $chain['root_event'];
-			$score = count($chain['links'])*0.20 + (6-($root['type_layer']??3))*0.15 + ((int)$root['severity']/5)*0.20;
-			if ($root['delta_seconds']===0) $score += 0.30;
+			$score = count($chain['links'])*0.20+(6-($root['type_layer']??3))*0.15+((int)$root['severity']/5)*0.20;
+			if ($root['delta_seconds']===0) $score+=0.30;
 			foreach ($registry['alert_patterns']['patterns']??[] as $p) {
-				if (fnmatch($p['cause_pattern'], $root['trigger_name'], FNM_CASEFOLD)) $score += 0.10*(float)($p['confidence']??0.5);
+				if (fnmatch($p['cause_pattern'],$root['trigger_name'],FNM_CASEFOLD)) $score+=0.10*(float)($p['confidence']??0.5);
 			}
-			if ($score > $bestScore) {
-				$bestScore = $score;
-				$best = ['eventid'=>$root['eventid'],'hostid'=>$root['hostid'],'host'=>$root['host'],
-				         'trigger'=>$root['trigger_name'],'clock'=>$root['clock'],'clock_fmt'=>$root['clock_fmt'],
-				         'severity'=>$root['severity'],'type_name'=>$root['type_name'],'customer'=>$root['customer_name'],
-				         'chain_id'=>$chain['chain_id'],'rca_score'=>round($score,2),'cascade_count'=>count($chain['links'])];
+			if ($score>$bestScore) {
+				$bestScore=$score;
+				$best=['eventid'=>$root['eventid'],'hostid'=>$root['hostid'],'host'=>$root['host'],
+				       'trigger'=>$root['trigger_name'],'clock'=>$root['clock'],'clock_fmt'=>$root['clock_fmt'],
+				       'severity'=>$root['severity'],'type_name'=>$root['type_name'],'customer'=>$root['customer_name'],
+				       'chain_id'=>$chain['chain_id'],'rca_score'=>round($score,2),'cascade_count'=>count($chain['links'])];
 			}
 		}
 		if ($best) { foreach ($events as &$evt) { if ($evt['eventid']===$best['eventid']) { $evt['rca_role']='root_cause'; break; } } unset($evt); }
@@ -521,24 +417,24 @@ class RcaData extends CController {
 		$gaps = [];
 		foreach ($events as $evt) {
 			foreach ($registry['gap_rules']['rules']??[] as $rule) {
-				if (!fnmatch($rule['trigger_pattern'], $evt['trigger_name'], FNM_CASEFOLD)) continue;
-				if (!empty($rule['trigger_type']) && $evt['type']!==$rule['trigger_type']) continue;
-				$we = $evt['clock']+(int)$rule['window_seconds']; $ef = false;
+				if (!fnmatch($rule['trigger_pattern'],$evt['trigger_name'],FNM_CASEFOLD)) continue;
+				if (!empty($rule['trigger_type'])&&$evt['type']!==$rule['trigger_type']) continue;
+				$we=$evt['clock']+(int)$rule['window_seconds']; $ef=false;
 				foreach ($events as $eff) {
 					if ($eff['clock']<$evt['clock']||$eff['clock']>$we) continue;
 					if (fnmatch($rule['expected_pattern'],$eff['trigger_name'],FNM_CASEFOLD)){$ef=true;break;}
 				}
-				if (!$ef) $gaps[] = ['rule_id'=>$rule['id'],'trigger_event'=>$evt['eventid'],
+				if (!$ef) $gaps[]=(['rule_id'=>$rule['id'],'trigger_event'=>$evt['eventid'],
 				    'trigger_host'=>$evt['host'],'trigger_name'=>$evt['trigger_name'],
 				    'expected'=>$rule['expected_pattern'],'window_s'=>$rule['window_seconds'],
-				    'severity'=>$rule['gap_severity'],'message'=>$rule['message'],'clock'=>$evt['clock']];
+				    'severity'=>$rule['gap_severity'],'message'=>$rule['message'],'clock'=>$evt['clock']]);
 			}
 		}
 		return $gaps;
 	}
 
-	private function buildSummary(array $events, array $chains, array $gaps, ?array $rootCause, int $tf, int $tt): array {
-		$sev = array_column($events,'severity'); $clocks = array_column($events,'clock');
+	private function buildSummary(array $events, array $chains, array $gaps, ?array $rc, int $tf, int $tt): array {
+		$sev=$c=array_column($events,'severity'); $clocks=array_column($events,'clock');
 		return ['total'=>count($events),
 			'disaster'=>count(array_filter($sev,fn($s)=>$s==5)),
 			'high'=>count(array_filter($sev,fn($s)=>$s==4)),
@@ -546,17 +442,17 @@ class RcaData extends CController {
 			'warning'=>count(array_filter($sev,fn($s)=>$s==2)),
 			'critical'=>count(array_filter($sev,fn($s)=>$s>=4)),
 			'affected_hosts'=>count(array_unique(array_column($events,'hostid'))),
-			'chain_count'=>count($chains),'gap_count'=>count($gaps),'root_identified'=>$rootCause!==null,
+			'chain_count'=>count($chains),'gap_count'=>count($gaps),'root_identified'=>$rc!==null,
 			'span_seconds'=>!empty($clocks)?max($clocks)-min($clocks):0,
 			'span_fmt'=>!empty($clocks)?$this->formatSpan(max($clocks)-min($clocks)):'0s',
 			'first_clock'=>!empty($clocks)?min($clocks):$tf,'last_clock'=>!empty($clocks)?max($clocks):$tt];
 	}
 
 	private function loadRegistry(): array {
-		$file = __DIR__.'/../config/rca_registry.json';
-		if (!file_exists($file)) return [];
-		$d = json_decode(file_get_contents($file), true);
-		return is_array($d) ? $d : [];
+		$f=__DIR__.'/../config/rca_registry.json';
+		if (!file_exists($f)) return [];
+		$d=json_decode(file_get_contents($f),true);
+		return is_array($d)?$d:[];
 	}
 
 	private function severityName(int $s): string {
