@@ -14,7 +14,7 @@
  * Namespace: Modules\RCA
  */
 
-namespace Modules\RCA;
+namespace Modules\RCA\Actions;
 
 use CController;
 use CControllerResponseData;
