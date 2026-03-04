@@ -109,9 +109,17 @@
 			});
 			const data = await resp.json();
 
+			if (data.debug) {
+				console.log('[RCA Debug]', data.debug);
+			}
+
 			if (data.error) {
-				showError(data.error);
+				showError(data.error, data.debug || null);
 				return;
+			}
+
+			if (data.summary && data.summary.total === 0) {
+				showError('API returned 0 events. Check debug panel below.', data.debug || null);
 			}
 
 			RCA.currentData = data;
