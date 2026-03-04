@@ -71,6 +71,11 @@ class RcaData extends CController {
 			$problems = $this->fetchProblems($timeFrom, $timeTill, $debug);
 			$debug['problems_fetched'] = count($problems);
 
+			// Fetch recovery events to set r_clock on resolved problems
+			if (!empty($problems)) {
+				$problems = $this->attachRecoveryTimes($problems, $timeFrom, $timeTill, $debug);
+			}
+
 			if (empty($problems)) {
 				$resp = $this->emptyResponse($timeFrom, $timeTill);
 				if (self::DEBUG) $resp['debug'] = $debug;
@@ -212,6 +217,63 @@ class RcaData extends CController {
 		}
 
 		return [];
+	}
+
+	/**
+	 * Fetch value=0 (recovery) events for the same triggers in the window.
+	 * Match them to problem events by objectid (triggerid) to set r_clock.
+	 * For problems still active (no recovery), r_clock stays null.
+	 */
+	private function attachRecoveryTimes(array $problems, int $timeFrom, int $timeTill, array &$debug): array {
+		$triggerIds = array_unique(array_column($problems, 'objectid'));
+		if (empty($triggerIds)) return $problems;
+
+		// Strip synthetic t_ prefixes — recovery lookup only works for real trigger IDs
+		$realTriggerIds = array_values(array_filter($triggerIds, fn($id) => !str_starts_with((string)$id, 't_')));
+		if (empty($realTriggerIds)) return $problems;
+
+		try {
+			$recoveries = API::Event()->get([
+				'output'    => ['eventid', 'objectid', 'clock'],
+				'source'    => 0,
+				'object'    => 0,
+				'value'     => 0,   // recovery events
+				'objectids' => $realTriggerIds,
+				'time_from' => $timeFrom,
+				'time_till' => $timeTill + 3600, // extend window to catch resolutions after till
+				'sortfield' => 'clock',
+				'sortorder' => 'ASC',
+			]);
+			$debug['recovery_events'] = is_array($recoveries) ? count($recoveries) : 'failed';
+		} catch (\Throwable $e) {
+			$debug['recovery_error'] = $e->getMessage();
+			return $problems;
+		}
+
+		if (!is_array($recoveries) || empty($recoveries)) return $problems;
+
+		// Build lookup: triggerid → [array of recovery clocks sorted ASC]
+		$recoveryMap = [];
+		foreach ($recoveries as $r) {
+			$recoveryMap[$r['objectid']][] = (int)$r['clock'];
+		}
+
+		// Match each problem to its nearest recovery event AFTER the problem clock
+		foreach ($problems as &$p) {
+			if (!empty($p['r_clock'])) continue;  // already has one (Problem API)
+			$tid = $p['objectid'];
+			if (!isset($recoveryMap[$tid])) continue;
+
+			foreach ($recoveryMap[$tid] as $rClock) {
+				if ($rClock > (int)$p['clock']) {
+					$p['r_clock'] = $rClock;
+					break;
+				}
+			}
+		}
+		unset($p);
+
+		return $problems;
 	}
 
 	private function fetchTriggerHostMap(array $triggerIds): array {
