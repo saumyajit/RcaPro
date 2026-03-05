@@ -34,11 +34,12 @@ class RcaData extends CController {
 			'env'          => 'string',
 			'customer'     => 'string',
 			'search'       => 'string',
-			'correlate_by' => 'array',
+			'correlate_by'      => 'array',
+			'customer_groupid'  => 'string',
 		];
 		$ret = $this->validateInput($fields);
 		if (!$ret) {
-			$this->sendJson($this->emptyResponse(0, 0));
+			$this->setResponse(new CControllerResponseData($this->emptyResponse(0, 0)));
 		}
 		return $ret;
 	}
@@ -52,6 +53,7 @@ class RcaData extends CController {
 		$timeFrom    = (int) $this->getInput('time_from', $timeTill - 3600);
 		$env         = $this->getInput('env', '');
 		$customer    = $this->getInput('customer', '');
+		$customerGroupId = $this->getInput('customer_groupid', '');
 		$search      = $this->getInput('search', '');
 		$correlateBy = $this->getInput('correlate_by', ['alert_name', 'time', 'hostgroup']);
 
@@ -87,12 +89,16 @@ class RcaData extends CController {
 			$triggerHostMap = $this->fetchTriggerHostMap($triggerIds);
 			$debug['triggers_mapped'] = count($triggerHostMap);
 
-			$hostIds  = array_unique(array_map(fn($h) => $h['hostid'], array_values($triggerHostMap)));
-			$hostsRaw = $this->fetchHosts($hostIds);
-			$hostMeta = $this->parseHostMeta($hostsRaw);
+			$hostIds       = array_unique(array_map(fn($h) => $h['hostid'], array_values($triggerHostMap)));
+			$hostsRaw      = $this->fetchHosts($hostIds);
+			$hostGroupsMap = $this->fetchHostGroupsMap($hostIds);
+			$debug['hostgroups_fetched'] = array_sum(array_map('count', $hostGroupsMap));
+			$hostMeta      = $this->parseHostMeta($hostsRaw, $hostGroupsMap);
 			$debug['hosts_found'] = count($hostMeta);
 
-			$problems = $this->applyFilters($problems, $triggerHostMap, $hostMeta, $env, $customer, $search);
+			// Resolve customer_groupid → allowed hostid set for group-based filtering
+			$allowedHostIds = $this->resolveGroupHostIds($customerGroupId, $debug);
+			$problems = $this->applyFilters($problems, $triggerHostMap, $hostMeta, $env, $allowedHostIds, $search);
 			$debug['after_filter'] = count($problems);
 
 			if (empty($problems)) {
@@ -312,20 +318,48 @@ class RcaData extends CController {
 		if (empty($hostIds)) return [];
 		try {
 			$r = API::Host()->get([
-				'output'       => ['hostid', 'host', 'name', 'status'],
-				'hostids'      => $hostIds,
-				'selectHostGroups' => ['groupid', 'name'],
-				'selectTags'   => ['tag', 'value'],
+				'output'   => ['hostid', 'host', 'name', 'status'],
+				'hostids'  => $hostIds,
+				'selectTags' => ['tag', 'value'],
 			]);
 			return is_array($r) ? $r : [];
 		} catch (\Throwable $e) { return []; }
 	}
 
-	private function parseHostMeta(array $hostsRaw): array {
+	/**
+	 * Fetch hostgroups for a set of hosts using API::HostGroup()->get().
+	 * Returns map: hostid → [groupname, groupname, ...]
+	 * This avoids the selectHostGroups/selectGroups key ambiguity in Zabbix 7.0.
+	 */
+	private function fetchHostGroupsMap(array $hostIds): array {
+		if (empty($hostIds)) return [];
+		try {
+			$groups = API::HostGroup()->get([
+				'output'  => ['groupid', 'name'],
+				'hostids' => $hostIds,
+				'selectHosts' => ['hostid'],
+			]);
+			if (!is_array($groups)) return [];
+
+			$map = [];
+			foreach ($groups as $group) {
+				// Zabbix may return "0" (string) instead of [] for empty relations — skip
+				$hosts = $group['hosts'] ?? [];
+				if (!is_array($hosts)) continue;
+				foreach ($hosts as $host) {
+					if (!is_array($host)) continue; // extra guard
+					$map[$host['hostid']][] = $group['name'];
+				}
+			}
+			return $map;
+		} catch (\Throwable $e) { return []; }
+	}
+
+	private function parseHostMeta(array $hostsRaw, array $hostGroupsMap = []): array {
 		$parser = new HostnameParser();
 		$meta   = [];
 		foreach ($hostsRaw as $host) {
-			$groups                = array_column($host['groups'] ?? [], 'name');
+			$groups                = $hostGroupsMap[$host['hostid']] ?? [];
 			$parsed                = $parser->parse($host['host'], $groups);
 			$meta[$host['hostid']] = array_merge($parsed, [
 				'hostid'     => $host['hostid'],
@@ -338,18 +372,50 @@ class RcaData extends CController {
 		return $meta;
 	}
 
+
+	/**
+	 * Given a groupid string, return the set of hostids in that group.
+	 * Returns null if no groupid specified (meaning: no filter, all hosts allowed).
+	 */
+	private function resolveGroupHostIds(string $groupId, array &$debug): ?array {
+		if ($groupId === '') return null; // no filter
+
+		try {
+			$hosts = API::Host()->get([
+				'output'   => ['hostid'],
+				'groupids' => [$groupId],
+			]);
+			$ids = is_array($hosts) ? array_column($hosts, 'hostid') : [];
+			$debug['customer_group_hostids'] = count($ids);
+			return $ids;
+		} catch (\Throwable $e) {
+			$debug['customer_group_error'] = $e->getMessage();
+			return null;
+		}
+	}
+
 	private function applyFilters(array $problems, array $triggerHostMap, array $hostMeta,
-	                               string $env, string $customer, string $search): array {
+	                               string $env, ?array $allowedHostIds, string $search): array {
 		return array_values(array_filter($problems, function($p)
-		       use ($triggerHostMap, $hostMeta, $env, $customer, $search) {
+		       use ($triggerHostMap, $hostMeta, $env, $allowedHostIds, $search) {
 			if ((int)$p['severity'] < 2) return false;
 			$host = $triggerHostMap[$p['objectid']] ?? null;
 			if (!$host) return false;
 			$meta = $hostMeta[$host['hostid']] ?? [];
-			if ($env      && ($meta['env']      ?? '') !== $env)      return false;
-			if ($customer && ($meta['customer'] ?? '') !== $customer) return false;
+
+			if ($env && ($meta['env'] ?? '') !== $env) return false;
+
+			// Group-based filter: check hostid is in the resolved group set
+			if ($allowedHostIds !== null && !in_array($host['hostid'], $allowedHostIds, true)) {
+				return false;
+			}
+
 			if ($search) {
-				$hay = strtolower(($host['host']??'').' '.($p['name']??'').' '.implode(' ',$meta['hostgroups']??[]));
+				$hay = strtolower(
+					($host['host'] ?? '') . ' ' .
+					($p['name']    ?? '') . ' ' .
+					implode(' ', $meta['hostgroups'] ?? [])
+				);
 				if (strpos($hay, strtolower($search)) === false) return false;
 			}
 			return true;
