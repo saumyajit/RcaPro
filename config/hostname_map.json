@@ -1,51 +1,172 @@
 {
 	"_comment": "Hostname format: {env:2}{customer:4}{product:2}{type:2}{instance:3} = 13 chars fixed. Edit this file to add new codes — no PHP changes needed.",
-
 	"format": {
 		"total_length": 13,
 		"segments": {
-			"env":      { "offset": 0, "length": 2 },
-			"customer": { "offset": 2, "length": 4 },
-			"product":  { "offset": 6, "length": 2 },
-			"type":     { "offset": 8, "length": 2 },
-			"instance": { "offset": 10, "length": 3 }
+			"env": {
+				"offset": 0,
+				"length": 2
+			},
+			"customer": {
+				"offset": 2,
+				"length": 4
+			},
+			"product": {
+				"offset": 6,
+				"length": 2
+			},
+			"type": {
+				"offset": 8,
+				"length": 2
+			},
+			"instance": {
+				"offset": 10,
+				"length": 3
+			}
 		}
 	},
-
 	"environments": {
-		"pr": { "name": "Production",  "short": "PROD", "color": "critical" },
-		"ts": { "name": "Test",        "short": "TEST", "color": "warning"  },
-		"dv": { "name": "Development", "short": "DEV",  "color": "ok"       }
+		"pr": {
+			"name": "Production",
+			"short": "PROD",
+			"color": "critical"
+		},
+		"ts": {
+			"name": "Test",
+			"short": "TEST",
+			"color": "warning"
+		},
+		"dv": {
+			"name": "Development",
+			"short": "DEV",
+			"color": "ok"
+		}
 	},
-
 	"customers": {
-		"bd19": { "name": "Google Inc",  "short": "Google",  "code": "bd19" },
-		"lk02": { "name": "Amazon Inc",  "short": "Amazon",  "code": "lk02" }
+		"bd19": {
+			"name": "Google Inc",
+			"short": "Google",
+			"code": "bd19"
+		},
+		"lk02": {
+			"name": "Amazon Inc",
+			"short": "Amazon",
+			"code": "lk02"
+		}
 	},
-
 	"products": {
 		"_comment": "Product codes are GLOBAL — same code means same product across all customers.",
-		"01": { "name": "Android",     "short": "Android" },
-		"02": { "name": "Grocery",     "short": "Grocery" },
-		"03": { "name": "Web Portal",  "short": "WebPortal" },
-		"04": { "name": "Analytics",   "short": "Analytics" },
-		"05": { "name": "Payments",    "short": "Payments" },
-		"06": { "name": "CRM",         "short": "CRM" },
-		"07": { "name": "TBD",         "short": "TBD" },
-		"08": { "name": "TBD",         "short": "TBD" },
-		"09": { "name": "TBD",         "short": "TBD" }
+		"01": {
+			"name": "Android",
+			"short": "Android"
+		},
+		"02": {
+			"name": "Grocery",
+			"short": "Grocery"
+		},
+		"03": {
+			"name": "Web Portal",
+			"short": "WebPortal"
+		},
+		"04": {
+			"name": "Analytics",
+			"short": "Analytics"
+		},
+		"05": {
+			"name": "Payments",
+			"short": "Payments"
+		},
+		"06": {
+			"name": "CRM",
+			"short": "CRM"
+		},
+		"07": {
+			"name": "TBD",
+			"short": "TBD"
+		},
+		"08": {
+			"name": "TBD",
+			"short": "TBD"
+		},
+		"09": {
+			"name": "TBD",
+			"short": "TBD"
+		}
 	},
-
 	"server_types": {
-		"01": { "name": "Web Server",      "short": "Web",     "icon": "🌐", "layer": 4 },
-		"02": { "name": "App Server",      "short": "App",     "icon": "⚡", "layer": 3 },
-		"03": { "name": "SQL DB / MSSQL",  "short": "SQL DB",  "icon": "🗄", "layer": 2 },
-		"04": { "name": "Oracle DB",       "short": "OraDB",   "icon": "🗄", "layer": 2 },
-		"05": { "name": "Load Balancer",   "short": "LB",      "icon": "⚖", "layer": 5 },
-		"06": { "name": "Citrix Server",   "short": "Citrix",  "icon": "🖥", "layer": 3 },
-		"07": { "name": "Storage",         "short": "Storage", "icon": "💾", "layer": 1 }
+		"01": {
+			"name": "Web Server",
+			"short": "Web",
+			"icon": "🌐",
+			"layer": 4
+		},
+		"02": {
+			"name": "App Server",
+			"short": "App",
+			"icon": "⚡",
+			"layer": 3
+		},
+		"03": {
+			"name": "SQL DB / MSSQL",
+			"short": "SQL DB",
+			"icon": "🗄",
+			"layer": 2
+		},
+		"04": {
+			"name": "Oracle DB",
+			"short": "OraDB",
+			"icon": "🗄",
+			"layer": 2
+		},
+		"05": {
+			"name": "Load Balancer",
+			"short": "LB",
+			"icon": "⚖",
+			"layer": 5
+		},
+		"06": {
+			"name": "Citrix Server",
+			"short": "Citrix",
+			"icon": "🖥",
+			"layer": 3
+		},
+		"07": {
+			"name": "Storage",
+			"short": "Storage",
+			"icon": "💾",
+			"layer": 1
+		},
+		"08": {
+			"name": "Zabbix Server",
+			"short": "Zabbix",
+			"icon": "📡",
+			"layer": 3
+		},
+		"09": {
+			"name": "Monitoring",
+			"short": "Monitor",
+			"icon": "📡",
+			"layer": 3
+		},
+		"10": {
+			"name": "Proxy",
+			"short": "Proxy",
+			"icon": "🔀",
+			"layer": 5
+		},
+		"11": {
+			"name": "Firewall",
+			"short": "FW",
+			"icon": "🔥",
+			"layer": 5
+		},
+		"12": {
+			"name": "Network Switch",
+			"short": "Switch",
+			"icon": "🔌",
+			"layer": 5
+		}
 	},
-
 	"dependency_order": {
 		"_comment": "Layer numbers define expected cascade direction. Lower layer = closer to infrastructure (more likely root cause). Higher = closer to user.",
 		"1": "Storage",
@@ -54,11 +175,30 @@
 		"4": "Web",
 		"5": "Load Balancer"
 	},
-
 	"hostgroup_patterns": {
 		"_comment": "Regex patterns to extract metadata from Zabbix hostgroup names when hostname parse fails or is partial.",
 		"customer": "^CUSTOMER\\/(.+)$",
-		"product":  "^PRODUCT\\/(.+)$",
-		"type":     "^TYPE\\/(.+)$"
+		"product": "^PRODUCT\\/(.+)$",
+		"type": "^TYPE\\/(.+)$"
+	},
+	"server_type_aliases": {
+		"ZABBIX SERVER": "08",
+		"ZABBIX": "08",
+		"MONITORING": "09",
+		"PROXY": "10",
+		"FIREWALL": "11",
+		"NETWORK SWITCH": "12",
+		"SWITCH": "12",
+		"WEB": "01",
+		"APP": "02",
+		"DATABASE": "03",
+		"DB": "03",
+		"ORACLE": "04",
+		"LB": "05",
+		"LOAD BALANCER": "05",
+		"CITRIX": "06",
+		"STORAGE": "07",
+		"MGMT": "08",
+		"MANAGEMENT": "08"
 	}
 }
