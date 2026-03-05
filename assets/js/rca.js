@@ -101,9 +101,10 @@
 		const params = new URLSearchParams();
 		params.set('time_from', timeFrom);
 		params.set('time_till', timeTill);
-		if (env)      params.set('env',      env);
-		if (customer) params.set('customer', customer);
-		if (search)   params.set('search',   search);
+		if (env)      params.set('env',    env);
+		if (search)   params.set('search', search);
+		// customer select value is now a groupid (numeric string from Zabbix)
+		if (customer) params.set('customer_groupid', customer);
 
 		// Correlation filters — send each active one as correlate_by[]
 		const activeCorrelate = Array.from(
@@ -439,7 +440,7 @@
 	function renderEventTab(evt, data) {
 		const rootCause = data.root_cause;
 		const isRoot    = evt.rca_role === 'root_cause';
-		const dotCls    = 'rca-sev-dot-' + (evt.severity >= 4 ? 'crit' : evt.severity >= 2 ? 'warn' : 'ok');
+		const dotCls    = 'rca-sev-dot-' + (evt.severity_class || 'nc');
 
 		// Find matching registry pattern
 		let patternHtml = '';
@@ -472,8 +473,12 @@
 
 		<div class="rca-kv-grid">
 			<div class="rca-kv"><div class="rca-kv-k">Severity</div><div class="rca-kv-v rca-${evt.severity>=4?'crit':evt.severity>=2?'warn':'ok'}">${escHtml(evt.severity_name)}</div></div>
-			<div class="rca-kv"><div class="rca-kv-k">Status</div><div class="rca-kv-v rca-crit">PROBLEM</div></div>
-			<div class="rca-kv"><div class="rca-kv-k">Time</div><div class="rca-kv-v">${escHtml(evt.clock_fmt)}</div></div>
+			<div class="rca-kv"><div class="rca-kv-k">Status</div><div class="rca-kv-v ${evt.r_clock ? 'rca-ok' : 'rca-crit'}">${evt.r_clock ? '✓ RESOLVED' : '● PROBLEM'}</div></div>
+			<div class="rca-kv"><div class="rca-kv-k">Triggered</div><div class="rca-kv-v">${escHtml(evt.clock_fmt)}</div></div>
+			<div class="rca-kv"><div class="rca-kv-k">Resolved At</div>
+				<div class="rca-kv-v ${evt.r_clock ? 'rca-ok' : 'rca-text3'}">${evt.r_clock ? formatTime(evt.r_clock) : '—'}</div></div>
+			<div class="rca-kv"><div class="rca-kv-k">Error Duration</div>
+				<div class="rca-kv-v ${evt.r_clock ? '' : 'rca-text3'}">${evt.r_clock ? formatDuration(evt.r_clock - evt.clock) : '—'}</div></div>
 			<div class="rca-kv"><div class="rca-kv-k">Event ID</div><div class="rca-kv-v">#${escHtml(String(evt.eventid))}</div></div>
 			<div class="rca-kv"><div class="rca-kv-k">Chain</div><div class="rca-kv-v">${escHtml(evt.chain_id || 'None')}</div></div>
 			<div class="rca-kv"><div class="rca-kv-k">RCA Role</div><div class="rca-kv-v rca-${isRoot?'crit':'info'}">${isRoot?'★ ROOT CAUSE': escHtml(evt.rca_role || 'cascade')}</div></div>
